@@ -1,0 +1,13 @@
+{
+  "domain": "ezykam",
+  "name": "CP Plus Ezykam",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://github.com/JerryInd/EzyKam-HA-integration",
+  "issue_tracker": "https://github.com/JerryInd/EzyKam-HA-integration/issues",
+  "integration_type": "hub",
+  "iot_class": "cloud_push",
+  "loggers": ["custom_components.ezykam"],
+  "requirements": ["aiomqtt>=2.0,<3", "aiortc>=1.6,<2", "av>=12", "Pillow>=10"],
+  "version": "0.1.0"
+}

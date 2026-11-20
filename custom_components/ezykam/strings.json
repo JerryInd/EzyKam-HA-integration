@@ -1,0 +1,53 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect your Ezykam account",
+        "description": "Home Assistant signs in by showing you a QR code to scan with the ezyKam+ mobile app. **Your password is never entered or stored.**\n\nSelect **Submit** to generate the code.",
+        "data": {},
+        "data_description": {}
+      },
+      "scan": {
+        "title": "Scan to sign in",
+        "description": "![Scan this QR code with the ezyKam+ app]({qr_url})\n\nOpen the **ezyKam+** app, choose **Scan**, and point it at the code above.\n\nOnce you have scanned it, select **Submit**.",
+        "data": {}
+      },
+      "reauth_confirm": {
+        "title": "Reconnect Ezykam",
+        "description": "The cloud rejected the stored session. Select **Submit** and a new QR code will be generated for you to scan with the ezyKam+ app.",
+        "data": {}
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to reach the Ezykam cloud",
+      "invalid_auth": "The cloud rejected the sign-in",
+      "timeout": "The QR code expired before it was scanned",
+      "unknown": "Unexpected error. Check the Home Assistant logs."
+    },
+    "abort": {
+      "already_configured": "This Ezykam account is already connected",
+      "reauth_successful": "Reconnection was successful",
+      "login_failed": "Sign-in failed — please try again",
+      "timeout": "The QR code expired before it was scanned",
+      "invalid_auth": "The cloud rejected the stored session",
+      "cannot_connect": "Unable to reach the Ezykam cloud",
+      "unknown": "Unexpected error. Check the Home Assistant logs.",
+      "no_devices": "No cameras were found on this account"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Ezykam options",
+        "data": {
+          "stream_profile": "Default stream profile",
+          "scan_interval": "Online status refresh (seconds)"
+        },
+        "data_description": {
+          "stream_profile": "Main is higher resolution. Sub is used automatically when the main stream uses a codec this integration cannot decode.",
+          "scan_interval": "How often to refresh camera online/offline status."
+        }
+      }
+    }
+  }
+}

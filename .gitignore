@@ -1,0 +1,46 @@
+# Secrets and session material — never commit.
+.env
+.session/
+*.session.json
+qr.png
+
+# Captured traffic / private HAR data — never commit.
+*.har
+*.har.json
+captures/
+
+# Reference material extracted from the supplied prototype archive.
+_prototype_extract/
+
+# Derived evidence (images, captured certs) — regenerated on demand.
+*.der
+*.png
+*.jpg
+*.jpeg
+# ...except the integration's own brand assets, which ship with the repo.
+!custom_components/ezykam/brand/*.png
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local Home Assistant Core test instance
+.ha-venv/
+.ha-config/
+
+# Home Assistant build artefacts
+config/
+.storage/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

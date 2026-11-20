@@ -1,0 +1,8 @@
+# Runtime dependencies for local development and the standalone bridge.
+# Home Assistant installs these itself from manifest.json.
+aiohttp>=3.10,<4
+aiomqtt>=2,<3
+aiortc>=1.6,<2
+av>=12,<19
+Pillow>=10
+python-dotenv>=1.0,<2
