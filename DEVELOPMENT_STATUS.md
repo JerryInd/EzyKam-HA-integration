@@ -26,7 +26,7 @@
 | 7 | Home Assistant integration | ✅ | **executed on real HA 2026.11.2** — flow, entities, camera proxy, diagnostics |
 | 8 | Deployment | ✅ | Windows script **run and verified**; RPi + HACS + upgrade + troubleshooting docs |
 
-**Test suite: 114 passing** (`python -m pytest`, ~4 s).
+**Test suite: 119 passing** (`python -m pytest`, ~4 s).
 **Windows setup script: executed end-to-end** (venv → deps → tests green).
 **Repo initialised; 55 files staged with zero secret material** (`.session/`,
 `.har`, `.env`, `.der`, `.png`, `_prototype_extract/` all excluded).
@@ -370,3 +370,22 @@ Also fixed while here: `ApiConfig.base_url` no longer exists in HA 2026
 renders **no step description**, so the QR could never appear — the scan step
 is now a form that serves the image from `/api/ezykam/qr/{nonce}` (unguessable
 24-byte capability token, 330 s TTL, indistinguishable 404).
+
+### 2026-11-22 - Session-expiry resilience
+Reported as "Failed to set up: Ezykam session expired".
+
+The entry failing on an expired session is *correct* behaviour — it is what
+raises Home Assistant's reauthentication dialog. What was wrong is that a
+**single** rejection was enough to destroy the entry, so one transient
+`USER_SESSION_INVALID` from the cloud looked like a full logout.
+
+`discover_with_retry()` now requires **consecutive** failures before declaring
+a session dead: one blip recovers silently after a 2 s delay, while a genuinely
+expired session still raises on the second attempt and triggers reauth. It
+lives in `core/` rather than the coordinator so it is unit-testable without
+Home Assistant — three new tests cover recover / exhaust / no-retry.
+
+Not yet established: *why* sessions expire. The leading untested hypothesis is
+that `/api/hybrid/getMsid` (called on every setup) invalidates the incumbent
+session; `scripts/test_qrcode_invalidates.py` now tests that first, then a
+fresh QR mint, in a single scan.

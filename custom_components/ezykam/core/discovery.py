@@ -16,6 +16,7 @@ can trigger reauthentication.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Any
@@ -140,3 +141,32 @@ async def discover(client: EzykamClient) -> DiscoveryResult:
         result.online_count,
     )
     return result
+
+
+async def discover_with_retry(
+    client: EzykamClient, *, delay: float = 2.0, attempts: int = 2
+) -> DiscoveryResult:
+    """Discover the inventory, retrying on session rejection.
+
+    A single ``USER_SESSION_INVALID`` can be a transient cloud hiccup, and
+    treating it as fatal marks the whole config entry failed and demands a QR
+    rescan. Requiring *consecutive* failures means only a genuinely dead
+    session triggers reauthentication, while a one-off blip recovers quietly.
+    """
+    last_error: SessionExpiredError | None = None
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            return await discover(client)
+        except SessionExpiredError as exc:
+            last_error = exc
+            if attempt < attempts:
+                _LOGGER.warning(
+                    "Session rejected during discovery (attempt %d/%d); "
+                    "retrying in %.1fs before declaring it expired",
+                    attempt,
+                    attempts,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+    assert last_error is not None
+    raise last_error

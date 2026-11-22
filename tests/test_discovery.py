@@ -268,3 +268,61 @@ def test_discovery_result_summary_is_redaction_safe() -> None:
     assert "0123456789abcdef" not in text
     assert "203.0.113.7" not in text
     assert result.as_dict()["camera_count"] == 2
+
+
+# ---------------------------------------------------------------------------
+# discover_with_retry: a single rejection must not destroy the config entry
+# ---------------------------------------------------------------------------
+
+
+class FlakyClient(FakeClient):
+    """Fails the first N homeList calls with a session error, then recovers."""
+
+    def __init__(self, *, fail_times: int, **kwargs) -> None:  # noqa: ANN003
+        super().__init__(**kwargs)
+        self._fail_times = fail_times
+        self.homes_calls = 0
+
+    async def homes(self) -> list[Any]:
+        self.homes_calls += 1
+        if self.homes_calls <= self._fail_times:
+            raise SessionExpiredError(
+                "blip", path="/api/customized/common/homeList", status=401
+            )
+        return await super().homes()
+
+
+def test_retry_recovers_from_a_transient_session_rejection() -> None:
+    """One rejection must not mark the entry as needing reauth."""
+    from custom_components.ezykam.core.discovery import discover_with_retry
+
+    client = FlakyClient(
+        fail_times=1,
+        homes=[HOME_LIVE],
+        devices={"100000001": [DEVICE_LIVE]},
+        shared=[],
+    )
+    result = run(discover_with_retry(client, delay=0.0))
+
+    assert result.camera_count == 1
+    assert client.homes_calls == 2, "should have retried exactly once"
+
+
+def test_retry_still_raises_after_consecutive_failures() -> None:
+    """A genuinely dead session must still trigger reauthentication."""
+    from custom_components.ezykam.core.discovery import discover_with_retry
+
+    client = FlakyClient(fail_times=99, homes=[HOME_LIVE], shared=[])
+    with pytest.raises(SessionExpiredError):
+        run(discover_with_retry(client, delay=0.0, attempts=2))
+    assert client.homes_calls == 2, "must stop after the configured attempts"
+
+
+def test_retry_does_not_fire_when_discovery_succeeds() -> None:
+    from custom_components.ezykam.core.discovery import discover_with_retry
+
+    client = FakeClient(
+        homes=[HOME_LIVE], devices={"100000001": [DEVICE_LIVE]}, shared=[]
+    )
+    result = run(discover_with_retry(client, delay=0.0))
+    assert result.camera_count == 1

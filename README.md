@@ -131,7 +131,7 @@ custom_components/ezykam/
 ├── binary_sensor.py       # online/offline
 ├── web.py                 # QR image endpoint
 └── diagnostics.py         # redacted support dump
-tests/                     # 114 tests
+tests/                     # 119 tests
 ```
 
 `core/` imports nothing from Home Assistant, so the protocol layer can be
@@ -146,7 +146,7 @@ Home Assistant installation.
 python -m venv .venv
 .venv\Scripts\activate        # Windows
 pip install -r requirements-dev.txt
-python -m pytest              # 114 tests, ~4s
+python -m pytest              # 119 tests, ~4s
 ```
 
 Live scripts in [`scripts/`](scripts/) — QR login, discovery, streaming,

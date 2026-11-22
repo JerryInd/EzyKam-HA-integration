@@ -35,7 +35,7 @@ from .core.const import (
     DOMAIN,
     STREAM_PROFILE_MAIN,
 )
-from .core.discovery import DiscoveryResult, discover
+from .core.discovery import DiscoveryResult, discover, discover_with_retry
 from .core.models import AuthSession
 from .core.mqtt import EzykamMqttClient, user_topic
 from .core.webrtc import SessionRouter, WebRtcSession
@@ -55,6 +55,8 @@ MJPEG_FPS = 15.0
 FIRST_FRAME_TIMEOUT = 8.0
 #: Upper bound on the setup-time MQTT pre-connect.
 WARM_UP_TIMEOUT = 15.0
+#: Delay before re-attempting discovery after a session rejection.
+RETRY_DELAY = 2.0
 JPEG_QUALITY = 82
 
 
@@ -102,7 +104,9 @@ class EzykamDataUpdateCoordinator(DataUpdateCoordinator[DiscoveryResult]):
     # ------------------------------------------------------------------
     async def _async_update_data(self) -> DiscoveryResult:
         try:
-            result = await discover(self.client)
+            # discover_with_retry lives in core so it is unit-testable without
+            # Home Assistant; it only re-raises after consecutive failures.
+            result = await discover_with_retry(self.client, delay=RETRY_DELAY)
         except SessionExpiredError as err:
             # Drives HA's reauthentication dialog instead of silent retries.
             raise ConfigEntryAuthFailed("Ezykam session expired") from err
