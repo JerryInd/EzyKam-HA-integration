@@ -71,7 +71,18 @@ async def run(timeout: float) -> int:
         if not await check(client, "homeList (baseline)"):
             return 1
 
-        print("\n=== step 3: call getMsid (runs at every HA setup) ===")
+        print("\n=== step 3: app/info (first call discover() makes) ===")
+        try:
+            info = await client.request("/api/customized/app/info", {})
+            if isinstance(info, dict):
+                print(f"  app/info keys={sorted(info)}")
+            else:
+                print(f"  app/info returned {type(info).__name__}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  app/info failed: {type(exc).__name__}: {exc}")
+        alive_after_appinfo = await check(client, "homeList after app/info")
+
+        print("\n=== step 4: getMsid (runs at every HA setup) ===")
         try:
             creds = await client.request("/api/hybrid/getMsid", {})
             if isinstance(creds, dict):
@@ -80,8 +91,6 @@ async def run(timeout: float) -> int:
                 print(f"  getMsid returned {type(creds).__name__}")
         except Exception as exc:  # noqa: BLE001
             print(f"  getMsid failed: {type(exc).__name__}: {exc}")
-
-        print("\n=== step 4: is the session still valid after getMsid? ===")
         alive_after_msid = await check(client, "homeList after getMsid")
 
         print("\n=== step 5: mint a NEW QR token ===")
@@ -92,11 +101,9 @@ async def run(timeout: float) -> int:
             print(f"  new token minted fp={new_challenge.token_fingerprint}")
         except Exception as exc:  # noqa: BLE001
             print(f"  qrcode call failed: {type(exc).__name__}: {exc}")
-
-        print("\n=== step 6: is the session still valid? ===")
         alive_after_qrcode = await check(client, "homeList after qrcode")
 
-        print("\n=== step 7: call login/exchange too ===")
+        print("\n=== step 6: call login/exchange too ===")
         if new_challenge is not None:
             try:
                 await client.login_exchange(new_challenge)
@@ -106,25 +113,22 @@ async def run(timeout: float) -> int:
         alive_after_exchange = await check(client, "homeList after exchange")
 
         print("\n=== RESULT ===")
-        if not alive_after_msid:
-            print(
-                "CONFIRMED: /api/hybrid/getMsid invalidates the session. "
-                "It runs during every HA setup, which explains 'session "
-                "expired' shortly after start."
-            )
-            return 2
-        if not alive_after_qrcode:
-            print(
-                "CONFIRMED: minting a new QR token invalidates the current "
-                "session. Retrying a login kills the session you just made."
-            )
-            return 3
-        if not alive_after_exchange:
-            print("CONFIRMED: login/exchange invalidates the current session.")
-            return 4
+        verdicts = [
+            (alive_after_appinfo, "app/info", 2),
+            (alive_after_msid, "getMsid", 3),
+            (alive_after_qrcode, "qrcode", 4),
+            (alive_after_exchange, "login/exchange", 5),
+        ]
+        for alive, label, code in verdicts:
+            if not alive:
+                print(
+                    f"CONFIRMED: {label} invalidates the session. It runs during "
+                    "normal operation, which explains sessions dying ~7s after login."
+                )
+                return code
         print(
-            "NOT CONFIRMED: the session survived every call. Session expiry has "
-            "a different cause (most likely a server-side lifetime limit)."
+            "NOT CONFIRMED: the session survived every call. Expiry has a "
+            "different cause (server-side lifetime, or another call in the path)."
         )
         return 0
     finally:

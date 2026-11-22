@@ -42,6 +42,7 @@ from .models import (
     SESSION_LOST_CODES,
     AuthSession,
     QrChallenge,
+    fingerprint,
 )
 from .redact import mask, redact, redact_url
 
@@ -149,16 +150,48 @@ class EzykamClient:
     # headers / cookies
     # ------------------------------------------------------------------
     def _seed_cookies(self) -> None:
-        """Push the stored session into aiohttp's cookie jar."""
+        """Push the stored session into aiohttp's cookie jar, safely.
+
+        aiohttp quotes cookie values containing RFC6265 reserved characters.
+        If it re-encodes ours, the ``Cookie`` header would disagree with the
+        ``s-sid`` header we *also* send on every request — a mismatch a server
+        can reasonably reject. When that happens we drop the cookie entirely
+        and rely on the header alone, which is exactly what the portal's own
+        JavaScript sets explicitly via ``cookie.get("s-sid")``.
+        """
         cookies: dict[str, str] = {}
         if self.auth.sid:
             cookies[COOKIE_SESSION_ID] = self.auth.sid
         if self.auth.csrf_token:
             cookies[COOKIE_CSRF_TOKEN] = self.auth.csrf_token
-        if cookies:
-            self._session.cookie_jar.update_cookies(
-                cookies, response_url=URL(self.base_url)
-            )
+        if not cookies:
+            return
+
+        response_url = URL(self.base_url)
+        self._session.cookie_jar.update_cookies(cookies, response_url=response_url)
+
+        # Verify what would actually be *sent*, not what is stored: aiohttp
+        # quotes at output time, so checking the stored value passes even when
+        # the wire format differs.
+        jar = self._session.cookie_jar.filter_cookies(response_url)
+        for name, expected in cookies.items():
+            if name not in jar:
+                continue
+            rendered = jar[name].OutputString()  # "s-sid=value" (quoted if needed)
+            if rendered != f"{name}={expected}":
+                _LOGGER.warning(
+                    "Cookie %s would be sent re-encoded (%s vs %s); dropping it "
+                    "and sending the header only, which is what the portal does",
+                    name,
+                    mask(rendered),
+                    mask(f"{name}={expected}"),
+                )
+                # Any mismatched value is worse than omitting it: the explicit
+                # s-sid header is the mechanism the portal itself relies on.
+                self._session.cookie_jar.clear(
+                    lambda morsel: morsel.key in cookies
+                )
+                return
 
     def _build_headers(self, *, auth: bool, cloud_type: str | None = None) -> dict[str, str]:
         """Reproduce the header set the portal sends on every API call.
@@ -268,18 +301,24 @@ class EzykamClient:
         # completely different failures, and only this distinguishes them.
         error_code = body.get("errorCode") if body else None
         if status == 401 or error_code in SESSION_LOST_CODES:
-            jar_names = sorted(
-                self._session.cookie_jar.filter_cookies(URL(self.base_url)).keys()
-            )
+            # Compare the value we send as a header with the one the cookie jar
+            # would send. If they differ, the server sees two different session
+            # ids for one request - a concrete, fixable cause of rejection.
+            jar = self._session.cookie_jar.filter_cookies(URL(self.base_url))
+            jar_sid = jar.get(HEADER_SESSION_ID)
+            header_val = headers.get(HEADER_SESSION_ID, "")
+            jar_val = jar_sid.value if jar_sid else None
             _LOGGER.warning(
                 "Session rejected by %s (HTTP %s, code=%s); "
-                "s-sid header present=%s len=%s; jar cookies=%s",
+                "header s-sid len=%s fp=%s | jar s-sid %s fp=%s | match=%s",
                 path,
                 status,
                 error_code,
-                bool(headers.get(HEADER_SESSION_ID)),
-                len(headers.get(HEADER_SESSION_ID, "")),
-                jar_names,
+                len(header_val),
+                fingerprint(header_val),
+                "present" if jar_val is not None else "absent",
+                fingerprint(jar_val),
+                jar_val == header_val if jar_val is not None else "n/a",
             )
 
         return self._unwrap(body, path=path, status=status)
