@@ -39,6 +39,19 @@ def main() -> int:
         print(f"region_cpplus : {session.get('region_code_cpplus')}")
         print(f"mqtt_cpplus   : {session.get('mqtt_url_cpplus')}")
         print(f"session keys  : {sorted(session)}")
+        acquired = session.get("acquired_at")
+        print(f"acquired_at   : {acquired}")
+        if acquired:
+            try:
+                from datetime import datetime, timezone
+
+                when = datetime.fromisoformat(str(acquired))
+                if when.tzinfo is None:
+                    when = when.replace(tzinfo=timezone.utc)
+                age = datetime.now(timezone.utc) - when
+                print(f"session age   : {age}  (at time of this check)")
+            except ValueError:
+                print("session age   : <unparseable>")
 
     if not found:
         print("no ezykam config entry found")

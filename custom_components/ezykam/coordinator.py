@@ -57,6 +57,11 @@ FIRST_FRAME_TIMEOUT = 8.0
 WARM_UP_TIMEOUT = 15.0
 #: Delay before re-attempting discovery after a session rejection.
 RETRY_DELAY = 2.0
+#: The cloud's observed session lifetime (measured: acquired 2026-11-22T06:37Z,
+#: rejected 2026-11-25T06:48Z — 3 days, matching the s-sid cookie expiry).
+SESSION_LIFETIME_DAYS = 3.0
+#: Warn once when a session passes this age.
+SESSION_EXPIRY_WARN_DAYS = 2.5
 JPEG_QUALITY = 82
 
 
@@ -98,6 +103,7 @@ class EzykamDataUpdateCoordinator(DataUpdateCoordinator[DiscoveryResult]):
         self._latest_frame: dict[str, Any] = {}
         self._frame_seq: dict[str, int] = {}
         self._last_used: dict[str, float] = {}
+        self._expiry_warned = False
 
     # ------------------------------------------------------------------
     # discovery
@@ -115,7 +121,31 @@ class EzykamDataUpdateCoordinator(DataUpdateCoordinator[DiscoveryResult]):
 
         # Runs on every scheduled refresh, which is where idle cleanup belongs.
         await self.async_reap_idle_streams()
+        self._warn_if_session_nearing_expiry()
         return result
+
+    def _warn_if_session_nearing_expiry(self) -> None:
+        """Say so *before* the session dies, not after.
+
+        The cloud issues sessions with a fixed ~3 day lifetime and offers no
+        renewal endpoint, so expiry is inevitable rather than a fault. One
+        warning at the halfway-ish mark turns a surprise outage into a heads-up.
+        """
+        if self._expiry_warned:
+            return
+        age_days = self.client.auth.age_seconds / 86400.0
+        if age_days < SESSION_EXPIRY_WARN_DAYS:
+            return
+        self._expiry_warned = True
+        remaining = SESSION_LIFETIME_DAYS - age_days
+        _LOGGER.warning(
+            "Ezykam session is %.1f days old; the cloud issues sessions with a "
+            "~%.0f day lifetime and provides no renewal endpoint, so "
+            "reauthentication will be required in about %.1f day(s)",
+            age_days,
+            SESSION_LIFETIME_DAYS,
+            max(remaining, 0.0),
+        )
 
     @property
     def inventory(self) -> DiscoveryResult | None:

@@ -15,7 +15,7 @@ from homeassistant.core import HomeAssistant
 from .core.const import CONF_SESSION, DOMAIN
 from .core.models import fingerprint
 from .core.redact import redact
-from .coordinator import EzykamDataUpdateCoordinator
+from .coordinator import SESSION_LIFETIME_DAYS, EzykamDataUpdateCoordinator
 
 
 async def async_get_config_entry_diagnostics(
@@ -52,6 +52,10 @@ async def async_get_config_entry_diagnostics(
 
     payload["coordinator"] = {
         "stream_profile": coordinator.stream_profile,
+        # Session age is the single most useful number when reporting an
+        # "expired" problem: the cloud issues a fixed ~3 day lifetime.
+        "session_age_days": round(coordinator.client.auth.age_seconds / 86400.0, 2),
+        "session_lifetime_days_expected": SESSION_LIFETIME_DAYS,
         "mqtt": coordinator._mqtt.describe() if coordinator._mqtt else None,  # noqa: SLF001
         "active_streams": sorted(
             device_id

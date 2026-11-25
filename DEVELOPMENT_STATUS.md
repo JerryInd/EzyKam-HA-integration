@@ -389,3 +389,46 @@ Not yet established: *why* sessions expire. The leading untested hypothesis is
 that `/api/hybrid/getMsid` (called on every setup) invalidates the incumbent
 session; `scripts/test_qrcode_invalidates.py` now tests that first, then a
 fresh QR mint, in a single scan.
+
+### 2026-11-25 - Root cause of "session expired": the cloud's own 3-day lifetime
+
+The hypothesis above was **ruled out**: `test_qrcode_invalidates.py` returned
+NOT CONFIRMED — `app/info`, `getMsid`, `qrcode` and `login/exchange` each left
+the session intact. Four suspects eliminated in one scan.
+
+The actual cause was found by reading `acquired_at` out of the stored config
+entry rather than out of the log:
+
+| | |
+|---|---|
+| `acquired_at` | `2026-11-22T06:37:08Z` |
+| first `USER_SESSION_LOSS` | `2026-11-25T06:48Z` |
+| **lifetime** | **3 days, 0 h 11 m** |
+
+Three days is exactly the `s-sid` cookie's own `expires`, so the session died
+*on schedule*, not because of anything we did. Two independent checks confirm
+it:
+
+* **It is not a transmission fault** — the rejection log added in this session
+  prints `header s-sid len=82 fp=… | jar s-sid fp=… | match=True`. The header
+  and the jar carried byte-identical credentials, so the earlier
+  cookie-re-encoding hypothesis is dead too.
+* **There is no renewal path** — `/api/login/token` is *dead code* in the
+  portal: defined in the bundle, never called from any bundle. Our 30-second
+  polling does not extend the lifetime either.
+
+So expiry is **expected behaviour**, and the fix is to stop it being a
+surprise rather than to pretend it cannot happen:
+
+* `_warn_if_session_nearing_expiry()` logs one WARNING at 2.5 days old,
+  naming the remaining time, instead of letting the entry fail silently at
+  day 3.
+* Diagnostics now report `session_age_days` and
+  `session_lifetime_days_expected`, so a support dump answers "how old is
+  this session?" without needing the log.
+* The measured lifetime is recorded as `SESSION_LIFETIME_DAYS = 3.0` with the
+  two timestamps that establish it.
+
+Assumption flagged: `3.0` days is one measurement, not a documented cloud
+guarantee. The constants are named for exactly that reason — if a second
+observation disagrees, the number changes in one place.
