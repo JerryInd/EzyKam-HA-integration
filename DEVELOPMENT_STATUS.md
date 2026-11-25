@@ -432,3 +432,61 @@ surprise rather than to pretend it cannot happen:
 Assumption flagged: `3.0` days is one measurement, not a documented cloud
 guarantee. The constants are named for exactly that reason — if a second
 observation disagrees, the number changes in one place.
+
+### 2026-11-25 - Reauthentication never worked: two defects, both ours
+
+Re-scanning after the expiry diagnosis aborted with *"The cloud rejected the
+stored session"*. That message was misleading: it is the abort raised when
+`discover()` rejects a session **immediately after a QR login that reported
+success**. The login was the thing that was broken.
+
+The log shows the whole failure in 162 ms:
+
+```
+12:38:44.413  QR login: Requesting QR code
+12:38:44.470  Session cookies updated: sid_fp=28acd268a319   ← the DEAD session
+12:38:44.573  QR poll payload: {'domain': {}}                 ← pending, not success
+12:38:44.575  QR login established (session=28acd268a319)     ← before any scan
+```
+
+`28acd268a319` is the fingerprint of the expired session, and `{'domain': {}}`
+is the documented *pending* payload. The flow had "approved" with the dead
+credential before a scan was even possible.
+
+**Defect 1 — `_absorb_cookies` read the whole cookie jar.** Home Assistant
+hands every integration the same `ClientSession` (`async_get_clientsession`),
+so the coordinator's expired `s-sid` was already sitting in the jar when
+`config_flow._start_login()` built its login client. Filtering that jar back in
+made a brand-new, never-authenticated client look authenticated on its first
+response. Now only cookies **this response actually issued** are absorbed —
+the function's docstring said "freshly-issued" while the code read everything
+the jar held.
+
+**Defect 2 — approval accepted a session it never obtained.** The success test
+was `self._saw_body_sid or self._client.is_authenticated`. `is_authenticated`
+is `bool(sid)`, which was already true from defect 1, so the loop exited on
+poll one. It now requires the sid to have **changed since `start()`**: that
+admits both genuine arrival routes (cookie issued, or payload `sid` absorbed
+into an empty slot) and rejects a session that was merely already present.
+`_saw_body_sid` became write-only and was removed.
+
+Both fixes are in `core/`, so both are testable without Home Assistant. Two
+regression tests cover the exact production conditions — a jar already holding
+another client's session, and a client already holding a session when login
+begins.
+
+**Proof the tests are not vacuous:** `scripts/prove_regressions_fail.py`
+reinstates each old implementation, asserts the corresponding test *fails*, then
+restores the fix and asserts the suite is green again:
+
+```
+OK: cookie test fails against OLD jar-wide absorb (as required)
+OK: auth test fails against OLD is_authenticated approval (as required)
+OK: suite green with fixes restored
+```
+
+121 tests pass (was 119).
+
+**Still unproven:** that a genuine approval now succeeds end-to-end on live
+infrastructure. The old code never let a real scan reach the approval path, so
+the first post-fix reauthentication is the actual test.

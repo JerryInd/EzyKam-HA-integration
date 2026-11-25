@@ -88,8 +88,11 @@ class QrLoginFlow:
         self._on_progress = on_progress
         self._cancel = asyncio.Event()
         self._challenge: QrChallenge | None = None
-        #: Set once a poll payload carried a ``sid`` (the portal's success signal).
-        self._saw_body_sid = False
+        #: The session, if any, held when ``start()`` ran. Approval must *change*
+        #: it: a login flow that accepted whatever was already present would
+        #: report success carrying a stale session, which is exactly how
+        #: reauthentication came back as "The cloud rejected the stored session".
+        self._initial_sid: str = ""
         #: Set when the cloud answers ``false`` — the code is no longer usable.
         self._qr_invalid = False
 
@@ -116,6 +119,9 @@ class QrLoginFlow:
         self._cancel.clear()
         self._saw_body_sid = False
         self._qr_invalid = False
+        # Baseline for the approval check: whatever this client already held is
+        # by definition not a product of the login we are about to perform.
+        self._initial_sid = self._client.auth.sid
         self._report("Requesting QR code")
         challenge = await self._client.qrcode()
         self._challenge = challenge
@@ -195,8 +201,17 @@ class QrLoginFlow:
             # Portal-faithful success condition: it only ever checks
             # ``result.sid``. Cookies are absorbed as well, but a session is
             # accepted on the payload alone.
-            if self._saw_body_sid or self._client.is_authenticated:
-                auth = self._client.auth
+            #
+            # "Accepted" has to mean *newly obtained*. ``is_authenticated`` is
+            # equally true for a client that was already holding a session, and
+            # treating that as approval handed back the stale one as if the scan
+            # had succeeded — the source of "The cloud rejected the stored
+            # session" on every reauthentication. Requiring the sid to have
+            # *changed* since start() admits both genuine arrival routes (cookie
+            # issued, or payload sid absorbed into an empty slot) while rejecting
+            # a session that was merely already there.
+            auth = self._client.auth
+            if auth.is_complete and auth.sid != self._initial_sid:
                 if not auth.csrf_token:
                     # Not fatal — but worth shouting about, because it means
                     # the csrf-token cookie arrived somewhere other than here.
@@ -269,7 +284,6 @@ class QrLoginFlow:
         if not sid:
             return
 
-        self._saw_body_sid = True
         auth = self._client.auth
         if auth.sid:
             # The s-sid cookie is authoritative: that is the value the portal

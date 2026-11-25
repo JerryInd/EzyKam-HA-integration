@@ -131,6 +131,54 @@ def test_restored_session_seeds_cookie_jar_and_headers() -> None:
     assert captured["csrf-token"] == CSRF
 
 
+def test_stale_cookie_in_shared_jar_is_not_adopted() -> None:
+    """A cookie left in the jar by someone else must not become our session.
+
+    Regression: Home Assistant hands every integration the *same*
+    ``ClientSession``, so the coordinator's expired ``s-sid`` was sitting in the
+    cookie jar when the config flow built its login client. The old
+    ``_absorb_cookies`` read the whole jar, so the first response of a brand-new
+    login silently adopted the dead session — ``is_authenticated`` went True
+    before anybody scanned, and the flow "succeeded" carrying credentials the
+    cloud had already rejected.
+
+    Only cookies this response actually issued may be absorbed.
+    """
+    stale = "stale-sid-from-another-client"
+
+    async def main() -> None:
+        # The response deliberately issues no session cookie at all.
+        async def login(_request: web.Request) -> web.Response:
+            return ok({"token": "abc"})
+
+        app = web.Application()
+        app.router.add_post("/api/customized/qrcode", login)
+        async with serve(app) as base:
+            async with make_client(base) as client:
+                # Simulate the shared jar already holding another client's session.
+                client._session.cookie_jar.update_cookies(  # noqa: SLF001
+                    {"s-sid": stale}
+                )
+                assert not client.is_authenticated
+                # Guard against a vacuous test: the jar really must hold it,
+                # otherwise "not absorbed" would prove nothing.
+                from yarl import URL
+
+                held = client._session.cookie_jar.filter_cookies(  # noqa: SLF001
+                    URL(client.base_url)
+                )
+                assert held.get("s-sid") is not None, "stale cookie never landed"
+                assert held["s-sid"].value == stale
+
+                await client.request("/api/customized/qrcode", {})
+
+                # The response set no s-sid, so we must still be unauthenticated.
+                assert client.auth.sid == ""
+                assert not client.is_authenticated
+
+    run(main())
+
+
 def test_http_401_maps_to_session_expired() -> None:
     async def main() -> None:
         async def route(_request: web.Request) -> web.Response:

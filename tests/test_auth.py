@@ -12,6 +12,7 @@ from custom_components.ezykam.core.errors import (
     QrLoginError,
     QrLoginTimeoutError,
 )
+from custom_components.ezykam.core.models import AuthSession
 from support import err, make_client, make_token, ok, run, serve
 
 SID = "qr-issued-sid"
@@ -285,6 +286,47 @@ def test_body_sid_without_csrf_cookie_still_establishes_session() -> None:
                 assert session.is_complete
                 assert session.has_csrf is False
                 assert client.is_authenticated
+            finally:
+                await client.close()
+
+    run(main())
+
+
+def test_login_ignores_session_held_before_start() -> None:
+    """A login must not "succeed" with a session it never obtained.
+
+    Regression: the config flow builds its login client on Home Assistant's
+    shared ``ClientSession``, whose cookie jar already held the coordinator's
+    expired ``s-sid``. ``wait_for_approval`` treated ``is_authenticated`` as
+    approval, so it returned on the very first poll — carrying the dead session,
+    ~160 ms after the QR was minted and long before any scan. Reauthentication
+    then aborted with "The cloud rejected the stored session".
+
+    Approval has to mean the session *changed*. Here the server never issues
+    one, so the flow must keep polling and time out.
+    """
+    stale = "stale-sid-from-another-client"
+
+    async def main() -> None:
+        app, _state = _build_app(approve_after=10_000)
+        async with serve(app) as base:
+            # Pre-hold a session, exactly as the shared jar did in production.
+            client = make_client(base, auth=AuthSession(sid=stale))
+            try:
+                assert client.is_authenticated
+                flow = QrLoginFlow(client, poll_interval=0.2)
+                await flow.start()
+                try:
+                    await flow.wait_for_approval(timeout=0.5)
+                except QrLoginTimeoutError:
+                    pass
+                else:
+                    raise AssertionError(
+                        "login reported success without issuing a new session"
+                    )
+                # The stale session must still be the only one we hold: it was
+                # never ours to begin with, and must not be mistaken for a login.
+                assert client.auth.sid == stale
             finally:
                 await client.close()
 

@@ -87,6 +87,30 @@ def _describe_set_cookies(response: aiohttp.ClientResponse) -> list[dict[str, An
     return out
 
 
+def _issued_cookies(response: aiohttp.ClientResponse) -> dict[str, str]:
+    """Cookie name/value pairs carried by *this* response's ``Set-Cookie``.
+
+    Values are returned raw because they are consumed as credentials, never
+    printed — callers must mask before logging. Parsing the headers directly
+    (instead of reading ``response.cookies``) keeps this honest about provenance:
+    a cookie that merely sits in the jar was not issued here.
+    """
+    out: dict[str, str] = {}
+    try:
+        raw_headers = response.headers.getall("Set-Cookie", [])
+    except (AttributeError, KeyError):  # pragma: no cover - non-aiohttp response
+        return out
+    for raw in raw_headers:
+        first = raw.split(";", 1)[0]
+        name, sep, value = first.partition("=")
+        if not sep:
+            continue
+        name = name.strip()
+        if name:
+            out[name] = value.strip()
+    return out
+
+
 class EzykamClient:
     """One authenticated connection to the Ezykam cloud.
 
@@ -224,16 +248,29 @@ class EzykamClient:
         return headers
 
     def _absorb_cookies(self, response: aiohttp.ClientResponse) -> None:
-        """Pull freshly-issued session cookies out of a login response."""
-        jar = self._session.cookie_jar.filter_cookies(URL(self.base_url))
-        sid = jar.get(COOKIE_SESSION_ID)
-        csrf = jar.get(COOKIE_CSRF_TOKEN)
+        """Pull session cookies **issued by this response**.
+
+        Deliberately reads the response's own ``Set-Cookie`` headers rather
+        than filtering the cookie jar. The jar is Home Assistant's shared one
+        (``async_get_clientsession``), so it can already hold a stale
+        ``s-sid`` from an expired session — and filtering it back in made a
+        brand-new, never-authenticated login client look authenticated before
+        anybody scanned anything. The QR flow then reported success carrying
+        the dead session, which is what produced "The cloud rejected the
+        stored session" on every reauthentication attempt.
+
+        Reading only what this response actually issued makes "freshly
+        established" mean what it says, regardless of what the jar held.
+        """
+        issued = _issued_cookies(response)
+        sid = issued.get(COOKIE_SESSION_ID)
+        csrf = issued.get(COOKIE_CSRF_TOKEN)
         changed = False
-        if sid and sid.value and sid.value != self.auth.sid:
-            self.auth.sid = sid.value
+        if sid and sid != self.auth.sid:
+            self.auth.sid = sid
             changed = True
-        if csrf and csrf.value and csrf.value != self.auth.csrf_token:
-            self.auth.csrf_token = csrf.value
+        if csrf and csrf != self.auth.csrf_token:
+            self.auth.csrf_token = csrf
             changed = True
         if changed:
             _LOGGER.debug(
