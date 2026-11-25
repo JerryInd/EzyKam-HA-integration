@@ -490,3 +490,75 @@ OK: suite green with fixes restored
 **Still unproven:** that a genuine approval now succeeds end-to-end on live
 infrastructure. The old code never let a real scan reach the approval path, so
 the first post-fix reauthentication is the actual test.
+
+### 2026-11-25 - Password login investigated: not reachable for this tenant
+
+Requested as *"password login for no expiry"*. Reverse-engineered from the live
+portal bundle (`login-25594b77ddcce85d8592.js`, 2.2 MB, re-fetched because the
+original captures were gitignored), then probed. **Not implemented — the
+endpoints are gated off.**
+
+**The flow, decoded verbatim from the bundle** (not invented):
+
+```js
+Ei(W.jyInit)                                  // POST /api/jy/init -> securekey
+i = wi(n)                                     // strip all whitespace
+s = hi.md5.hex(a)                             // MD5 of password
+W.passwordLogin({ countryCode: n.countryCode.split("-")[0],
+                  userName: o, password: s,
+                  securekey: r, domain: location.hostname })
+```
+
+`securekey` comes from `window.yruleInitVerify(...)` — a **Tuya `yrule`
+behavioural captcha** loaded from `eustatic7f2e65.cdn5th.com/static/th-lib/yrule/v1/loader.js`,
+rendered into a `#captcha` div, requiring a human to solve it. `Ei` resolves
+with `JSON.stringify(result)`, or `false` if the script declines, in which case
+the caller aborts before ever calling `passwordLogin`.
+
+**Why it is unreachable — five dimensions tested, all identical:**
+
+| dimension | shapes tried | result |
+|---|---|---|
+| body | portal-exact, `+api/version`, `+securekey`, Tuya `{api,version,data}` | `API_OR_API_VERSION_WRONG` |
+| query string | `?api=jy.init&version=1.0` | `API_OR_API_VERSION_WRONG` |
+| headers | `api/version`, `x-api/x-api-version`, `x-ty-appid/x-ty-appver` | `API_OR_API_VERSION_WRONG` |
+| page-load cookies | `gTyPlatLang`, `locale`, `fast-sid` present | `API_OR_API_VERSION_WRONG` |
+| alternate hosts | `ezykam-eu.cppluscloud.com`, `hxp-cube.cppluscloud.com` | no route / TLS failure |
+
+**The control makes this conclusive.** On the *same host*, with the *same
+headers*, `/api/customized/qrcode` returns `success: true` while every password
+shape fails — so our transport, headers and session are healthy and the
+rejection is specific to those two endpoints. Siblings confirm they route
+differently: `/api/app/check` → `USER_SESSION_LOSS`, `/api/login/token` →
+`REMOTE_API_PARAM_ALL_INPUT_LOSS`, `/api/customized/config/info` → success.
+
+**The tenant is QR-only.** `/api/customized/config/info` returns
+`loginConfig: 0`, and module 59873 of the bundle defines
+`scan=0, account=1, scanAccount=2, accountScan=3`. `0` means *scan*. The
+password UI exists in the bundle but is switched off server-side for this
+domain, which is exactly what `API_OR_API_VERSION_WRONG` (「api或者api版本号错误」)
+means: the route is not published for our api/version.
+
+**Two endpoints are dead code in the portal itself:** `getLoginToken`
+(`/api/login/token`) and `checkAppId` (`/api/app/check`) are exported in module
+`W` but have **zero call sites** anywhere in the bundle — definitions only.
+
+**Would it have removed the 3-day expiry anyway? Almost certainly not.** The
+lifetime belongs to the `s-sid` cookie issued by the session service, not to the
+method used to reach it. Nothing in the bundle suggests a password session gets
+a longer-lived credential or a refresh token.
+
+**Also probed: `/api/login/token` as a renewal path.** It *is* routed (bare
+`{}` → `REMOTE_API_PARAM_ALL_INPUT_LOSS`, not "unknown route"), but rejects every
+param shape tried — `sid`, `token`, `uid`, `clientId`, `refreshToken`, alone and
+combined, with and without a fake `s-sid` cookie. Probe is deliberately
+unauthenticated with a fabricated sid so it can never rotate the live session
+Home Assistant holds.
+
+**Conclusion:** password login cannot be built for this tenant, and would not
+have changed the expiry even if it could. The expiry question is settled by the
+3-day measurement above; the remaining cost of QR is one scan per 3 days.
+
+Scripts: `scripts/probe_password_login.py` (consolidated five-dimension probe),
+`scripts/probe_login_token.py`. Both use a deliberately fake account, print only
+error codes, and store nothing.
